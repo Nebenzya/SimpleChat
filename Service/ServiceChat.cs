@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.ServiceModel;
 
 namespace Service
@@ -8,40 +9,91 @@ namespace Service
     public class ServiceChat : IServiceChat
     {
         private List<User> _users = new List<User>();
-        private int _newId = 1;
 
-        public int Connect(string nameUser)
+        public UserDTO Connect(string nameUser)
         {
-            User user = new User() { Id = _newId, Name = nameUser, operationContext = OperationContext.Current };
-            _newId++;
+            if (_users.Find(u => u.Name == nameUser).Id != default)
+                throw new Exception("Данное имя уже существует!");
+
+            User user = new User()
+            {
+                Id = Guid.NewGuid(),
+                Name = nameUser,
+                operationContext = OperationContext.Current,
+                Status = UserStatus.Online
+            };
+
             _users.Add(user);
-            SendMessage(user.Name + " вошёл в чат!", 0);
-            return user.Id;
+            SendMessage(user.Name + " вошёл в чат!");
+            SendUserStatusForAll(user);
+            return user.GetUserDTO();
         }
 
-        public void Disconnect(int id)
+        public void ChangeStatus(Guid id, UserStatus status)
         {
-            var user = _users.Find(i => i.Id == id);
-            if (user!=null)
+            var curUser = FindUser(id);
+            if (UserExist(curUser))
             {
-                _users.Remove(user);
-                SendMessage(user.Name + " вышел из чата!", 0);
+                curUser.Status = status;
+                SendUserStatusForAll(curUser);
             }
         }
 
-        public void SendMessage(string message, int id)
+        public void Disconnect(Guid id)
         {
-            foreach (var item in _users)
+            var user = FindUser(id);
+            if (UserExist(user) && _users.Remove(user))
             {
-                string answer = DateTime.Now.ToShortTimeString();
-                var user = _users.Find(i => i.Id == id);
-                if (user != null)
+                user.Status = UserStatus.Offline;
+                SendUserStatusForAll(user);
+                SendMessage(user.Name + " вышел из чата!");
+            }
+        }
+
+        public IEnumerable<UserDTO> GetOnlineUsers()
+        {
+            return _users.Select(u => u.GetUserDTO());
+        }
+
+        public void SendMessage(string message, Guid senderId = default, Guid recipientId = default)
+        {
+            // Если Id отправителя и имя получателя не указано,
+            // значит сообщение для всех, иначе это приват
+            if (senderId == default)
+            {
+                string str = AnswerHeader(string.Empty) + message;
+                foreach (var user in _users)
                 {
-                    answer += ": " + user.Name + " ";
+                    SendUserMessageSingle(user, str);
                 }
-                answer += message;
-                item.operationContext.GetCallbackChannel<IServerChatCallback>().MessageCallback(answer);
+            }
+            else if (recipientId != default)
+            {
+                var recipient = _users.First(i => i.Id == recipientId);
+
+                if (recipient != null)
+                {
+                    string str = AnswerHeader(_users.FirstOrDefault(i => i.Id == senderId).Name) + message;
+                    SendUserMessageSingle(recipient, str);
+                }
             }
         }
+
+        private string AnswerHeader(string userName) => DateTime.Now.ToShortTimeString() + $" {userName}: ";
+
+        private User FindUser(Guid id) => _users.Find(i => i.Id == id);
+
+        private void SendUserStatusForAll(User senderUser)
+        {
+            foreach (var u in _users)
+                u.operationContext.GetCallbackChannel<IServerChatCallback>()
+                                  .StatusCallback(senderUser.Id, senderUser.Status);
+        }
+
+        private void SendUserMessageSingle(User recipientUser, string message) => 
+            recipientUser.operationContext.GetCallbackChannel<IServerChatCallback>()
+                                 .MessageCallback(message);
+
+        private bool UserExist(User user) => user != null && user.Id != default;
     }
 }

@@ -1,8 +1,12 @@
-﻿using System;
+﻿using ClientApp.ServiceReference;
+using System;
+using System.Collections.Generic;
+using System.ComponentModel;
+using System.Linq;
+using System.ServiceModel;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Input;
-using System.ComponentModel;
-using ClientApp.ServiceChat;
 
 namespace ClientApp
 {
@@ -11,58 +15,87 @@ namespace ClientApp
     /// </summary>
     public partial class MainWindow : Window, IServiceChatCallback
     {
-        private bool _isConnected = false;
         private ServiceChatClient _client;
-        private int _id;
+        private UserDTO _thisUser;
+        private List<UserDTO> _users;
 
         public MainWindow()
         {
             InitializeComponent();
         }
 
-        private void Window_Closing(object sender, CancelEventArgs e)
+        private void Window_Loaded(object sender, RoutedEventArgs e)
         {
-            Disconnect();
+            InitClient();
         }
 
-        private void Connect()
+        private async void Window_Closing(object sender, CancelEventArgs e) => await Disconnect();
+
+        private void InitClient()
         {
             try
             {
-                if (!_isConnected)
+                _client = new ServiceChatClient(new InstanceContext(this));
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("Ошибка при создание клиента.\nПодключение невозможно!" + ex.Message.ToString());
+                buttonConnect.IsEnabled = false;
+            }
+        }
+
+
+        private async Task Connect()
+        {
+            try
+            {
+                if (ClientIsOK)
                 {
-                    _client = new ServiceChatClient(new System.ServiceModel.InstanceContext(this));
-                    _id = _client.Connect(textBoxName.Text);
+                    _thisUser = await _client.ConnectAsync(tbUserName.Text);
+                    await _client.ChangeStatusAsync(_thisUser.Id, UserStatus.Online);
+
                     buttonConnect.Content = "Отключиться";
-                    _isConnected = true;
-                    textBoxName.IsEnabled = false;
+                    tbUserName.IsEnabled = false;
                 }
+                else
+                    throw new Exception("Подключение не удалось!");
             }
             catch (Exception ex)
             {
                 MessageBox.Show(ex.ToString());
+                await Disconnect();
             }
 
         }
 
-        private void Disconnect()
+        private async Task Disconnect()
         {
-            if (_isConnected)
+            if (_client != null)
             {
-                _client.Disconnect(_id);
+                await _client?.DisconnectAsync(_thisUser.Id);
+
                 _client = null;
-                buttonConnect.Content = "Подключиться";
-                _isConnected = false;
-                textBoxName.IsEnabled = true;
             }
+            buttonConnect.Content = "Подключиться";
+            tbUserName.IsEnabled = true;
         }
 
-        private void buttonConnect_Click(object sender, RoutedEventArgs e)
+        private async Task GetAllUsers()
         {
-            if (_isConnected)
-                Disconnect();
+            _users = new List<UserDTO>(await _client.GetOnlineUsersAsync());
+        }
+
+        private async Task SetAllUsers()
+        {
+            cbOnlineUsers.DataContext = _users.Select(x => $"{x.Name}({x.Status})");
+        }
+
+        private async void buttonConnect_Click(object sender, RoutedEventArgs e)
+        {
+            if (ClientIsOK)
+                await Disconnect();
             else
-                Connect();
+                await Connect();
         }
 
         public void MessageCallback(string message)
@@ -70,16 +103,34 @@ namespace ClientApp
             listBox.Items.Add(message);
         }
 
+        public async void StatusCallback(Guid id, UserStatus status)
+        {
+            var user = _users.Find(u => u.Id == id);
+            if (user != null)
+            {
+                user.Status = status;
+            }
+            else
+            {
+                await GetAllUsers();
+            }
+
+            await SetAllUsers();
+        }
+
         private void TextBox_KeyDown(object sender, KeyEventArgs e)
         {
             if (e.Key == Key.Enter)
             {
-                if (_client != null)
+                if (ClientIsOK)
                 {
-                    _client.SendMessage(textBoxMessage.Text, _id);
-                    textBoxMessage.Text = "";
+                    _client.SendMessage(textBoxMessage.Text, senderId: _thisUser.Id, default);
+                    textBoxMessage.Text = string.Empty;
                 }
             }
         }
+
+
+        private bool ClientIsOK => _client != null && _client.State == CommunicationState.Opened;
     }
 }

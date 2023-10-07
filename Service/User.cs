@@ -1,10 +1,28 @@
-﻿using System.ServiceModel;
+﻿using System;
+using System.ServiceModel;
 namespace Service
 {
-    public class User
+    public enum UserStatus
     {
-        public int Id { get; set; }
+        Online,
+        Busy,
+        AFK,
+        Offline
+    }
+
+    internal class User
+    {
+        public Guid Id { get; set; }
         public string Name { get; set; }
         public OperationContext operationContext { get; set; }
+        public UserStatus Status { get; set; }
+        public UserDTO GetUserDTO() => new UserDTO { Id = Id, Name = Name, Status = Status };
+    }
+
+    public class UserDTO
+    {
+        public Guid Id { get; set; }
+        public string Name { get; set; }
+        public UserStatus Status { get; set; }
     }
 }
